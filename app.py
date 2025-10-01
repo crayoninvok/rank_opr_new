@@ -146,10 +146,13 @@ def create_performance_charts(results_df, ranking_type):
     # 2. Hours Distribution Chart
     fig_hours = go.Figure()
     
+    # Use 'mohh' if it exists, otherwise try 'operation_hours'
+    operation_col = 'mohh' if 'mohh' in top_10.columns else 'operation_hours'
+    
     fig_hours.add_trace(go.Bar(
         name='Operation Hours',
         x=top_10[entity_col],
-        y=top_10['mohh'],
+        y=top_10[operation_col],
         marker_color='#28a745'
     ))
     
