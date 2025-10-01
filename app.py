@@ -4,7 +4,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
-from analyze import analyze_excel_file
+import tempfile
+import time
+from analyze import analyze_excel_file_comprehensive, VehicleMetricsAnalyzer
 
 # Page configuration
 st.set_page_config(
@@ -49,8 +51,31 @@ st.markdown("""
         border-radius: 10px;
         margin: 1rem 0;
     }
+    .option-card {
+        background-color: #f8f9fa;
+        border-left: 4px solid #1f77b4;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        border-radius: 5px;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+def safe_remove_temp_file(file_path, max_attempts=5, delay=0.1):
+    """Safely remove temporary file with retry mechanism."""
+    for attempt in range(max_attempts):
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                return True
+        except PermissionError:
+            if attempt < max_attempts - 1:
+                time.sleep(delay)
+                delay *= 2  # Exponential backoff
+            else:
+                st.warning(f"Could not remove temporary file: {file_path}")
+                return False
+    return True
 
 def create_summary_cards(summary_stats):
     """Create metric cards for summary statistics."""
@@ -168,6 +193,131 @@ def create_performance_charts(results_df, ranking_type):
     
     return fig_availability, fig_hours, fig_scatter
 
+def create_option_distribution_chart(option_distribution, top_n=15):
+    """Create chart for option distribution analysis."""
+    # Get top N options
+    options_list = list(option_distribution.items())[:top_n]
+    
+    options = [opt for opt, _ in options_list]
+    hours = [data['total_hours'] for _, data in options_list]
+    percentages = [data['percentage_of_total'] for _, data in options_list]
+    categories = [data['category'] for _, data in options_list]
+    
+    # Color mapping for categories
+    color_map = {
+        'OPERATION': '#28a745',
+        'DELAY': '#ffc107', 
+        'BREAKDOWN': '#dc3545',
+        'READY': '#17a2b8',
+        'IDLE': '#6c757d'
+    }
+    colors = [color_map.get(cat, '#6c757d') for cat in categories]
+    
+    # Create horizontal bar chart
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=options[::-1],  # Reverse for better display
+        x=hours[::-1],
+        orientation='h',
+        marker_color=colors[::-1],
+        text=[f"{p:.1f}%" for p in percentages[::-1]],
+        textposition='inside',
+        hovertemplate='<b>%{y}</b><br>Hours: %{x:.1f}<br>Percentage: %{text}<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title=f'Top {top_n} Options by Total Hours',
+        xaxis_title='Total Hours',
+        yaxis_title='Options',
+        height=600,
+        showlegend=False,
+        margin=dict(l=200)  # More space for option names
+    )
+    
+    return fig
+
+def create_category_breakdown_chart(option_distribution):
+    """Create pie chart for category breakdown."""
+    # Aggregate by category
+    category_totals = {}
+    for option, data in option_distribution.items():
+        category = data['category']
+        if category not in category_totals:
+            category_totals[category] = 0
+        category_totals[category] += data['total_hours']
+    
+    fig = px.pie(
+        values=list(category_totals.values()),
+        names=list(category_totals.keys()),
+        title='Time Distribution by Category',
+        color_discrete_map={
+            'OPERATION': '#28a745',
+            'DELAY': '#ffc107', 
+            'BREAKDOWN': '#dc3545',
+            'READY': '#17a2b8',
+            'IDLE': '#6c757d'
+        }
+    )
+    
+    fig.update_traces(textposition='inside', textinfo='percent+label')
+    fig.update_layout(height=400)
+    
+    return fig
+
+def display_option_analytics(option_distribution, top_n=10):
+    """Display option distribution analytics in a structured way."""
+    st.markdown("### 🔍 Detailed Option Analysis")
+    
+    options_list = list(option_distribution.items())[:top_n]
+    
+    for rank, (option, data) in enumerate(options_list, 1):
+        with st.container():
+            # Main option info
+            col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+            
+            with col1:
+                category_emoji = {
+                    'OPERATION': '✅', 'DELAY': '⏳', 'BREAKDOWN': '🔧',
+                    'READY': '🚀', 'IDLE': '⏸️'
+                }
+                emoji = category_emoji.get(data['category'], '📋')
+                st.write(f"**{rank}. {emoji} {option}**")
+                st.caption(f"Category: {data['category']}")
+            
+            with col2:
+                st.metric("Total Hours", f"{data['total_hours']:.1f}")
+            
+            with col3:
+                st.metric("% of Total", f"{data['percentage_of_total']:.1f}%")
+            
+            with col4:
+                st.metric("Frequency", f"{data['frequency']:,}")
+            
+            # Additional details in expandable section
+            with st.expander(f"Details for {option}"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**Duration Statistics:**")
+                    st.write(f"• Average: {data['avg_duration_hours']:.2f} hours")
+                    st.write(f"• Minimum: {data['min_duration']:.2f} hours")
+                    st.write(f"• Maximum: {data['max_duration']:.2f} hours")
+                    st.write(f"• Median: {data['median_duration']:.2f} hours")
+                
+                with col2:
+                    st.write("**Unit Impact:**")
+                    st.write(f"• Units Affected: {data['unique_units_affected']}")
+                    
+                    if data['unit_breakdown']:
+                        st.write("**Most Affected Units:**")
+                        unit_sorted = sorted(data['unit_breakdown'].items(), 
+                                           key=lambda x: x[1]['hours'], reverse=True)
+                        for unit, unit_data in unit_sorted[:3]:  # Top 3
+                            st.write(f"• {unit}: {unit_data['hours']:.1f}h ({unit_data['frequency']}x)")
+            
+            st.divider()
+
 def style_dataframe(df):
     """Apply styling to the dataframe."""
     def highlight_performance(val):
@@ -235,6 +385,11 @@ def main():
         ua_threshold = st.slider("Utilization Availability Target (%)", 0, 100, 80)
         eff_threshold = st.slider("Efficiency Target (%)", 0, 100, 75)
         
+        # Option analysis configuration
+        st.markdown("### 🔍 Option Analysis")
+        show_option_analysis = st.checkbox("Show Option Distribution Analysis", value=True)
+        top_n_options = st.slider("Number of Top Options to Display", 5, 30, 15)
+        
         # About section
         with st.expander("ℹ️ About This Tool"):
             st.write("""
@@ -245,6 +400,8 @@ def main():
             **Efficiency (%)**: Percentage of total logged time spent in operation
             
             **Availability Score**: Average of PA% and UA%
+            
+            **Option Distribution**: Breakdown of specific issues within each status category
             """)
     
     # File upload section
@@ -257,6 +414,7 @@ def main():
     )
     
     if uploaded_file is not None:
+        temp_file_path = None
         try:
             # Show file info
             file_details = {
@@ -269,21 +427,19 @@ def main():
                 for key, value in file_details.items():
                     st.write(f"**{key}:** {value}")
             
-            # Save uploaded file temporarily
-            temp_file_path = f"temp_{uploaded_file.name}"
-            with open(temp_file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+            # Save uploaded file temporarily with better context management
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+                tmp_file.write(uploaded_file.getbuffer())
+                temp_file_path = tmp_file.name
             
             # Process data
             with st.spinner('🔄 Processing data...'):
                 group_by = 'vehicle_name' if ranking_type == "Vehicle" else 'operator_name'
                 
-                # Use the enhanced analyze_excel_file function
-                results_df, summary_stats = analyze_excel_file(temp_file_path, group_by, mohh)
-                
-                # Clean up temp file
-                if os.path.exists(temp_file_path):
-                    os.remove(temp_file_path)
+                # Use the comprehensive analyze function
+                results_df, summary_stats, status_analytics = analyze_excel_file_comprehensive(
+                    temp_file_path, group_by, mohh
+                )
             
             # Rename column for display
             entity_col = f"{ranking_type.lower()}_name"
@@ -294,7 +450,16 @@ def main():
             create_summary_cards(summary_stats)
             
             # Create tabs for different views
-            tab1, tab2, tab3, tab4 = st.tabs(["📊 Charts", "📋 Rankings Table", "🏆 Top Performers", "📉 Bottom Performers"])
+            if show_option_analysis:
+                tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+                    "📊 Performance Charts", "🔍 Option Distribution", "📋 Rankings Table", 
+                    "🏆 Top Performers", "📉 Bottom Performers", "📊 Category Breakdown"
+                ])
+            else:
+                tab1, tab3, tab4, tab5 = st.tabs([
+                    "📊 Performance Charts", "📋 Rankings Table", 
+                    "🏆 Top Performers", "📉 Bottom Performers"
+                ])
             
             with tab1:
                 st.markdown("### 📊 Performance Analytics")
@@ -305,7 +470,62 @@ def main():
                 st.plotly_chart(fig_hours, use_container_width=True)
                 st.plotly_chart(fig_scatter, use_container_width=True)
             
-            with tab2:
+            if show_option_analysis:
+                with tab2:
+                    st.markdown("### 🔍 Option Distribution Analysis")
+                    
+                    # Get option distribution - read file again for original data
+                    analyzer = VehicleMetricsAnalyzer(mohh=mohh)
+                    original_df = pd.read_excel(uploaded_file)
+                    option_distribution = analyzer.get_option_distribution(original_df, group_by)
+                    
+                    # Create charts
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        fig_options = create_option_distribution_chart(option_distribution, top_n_options)
+                        st.plotly_chart(fig_options, use_container_width=True)
+                    
+                    with col2:
+                        fig_category = create_category_breakdown_chart(option_distribution)
+                        st.plotly_chart(fig_category, use_container_width=True)
+                    
+                    # Display detailed option analytics
+                    display_option_analytics(option_distribution, top_n_options)
+                    
+                    # Option summary table
+                    st.markdown("### 📋 Option Summary Table")
+                    option_summary = analyzer.get_option_summary_table(option_distribution)
+                    st.dataframe(option_summary, use_container_width=True, height=400)
+                    
+                    # Download option analysis
+                    csv_option = option_summary.to_csv(index=False)
+                    st.download_button(
+                        label="📄 Download Option Analysis as CSV",
+                        data=csv_option,
+                        file_name="option_distribution_analysis.csv",
+                        mime="text/csv"
+                    )
+                
+                with tab6:
+                    st.markdown("### 📊 Category vs Options Comparison")
+                    
+                    # Get category comparison
+                    category_comparison = analyzer.get_category_vs_options_comparison(original_df)
+                    
+                    st.dataframe(category_comparison, use_container_width=True, height=500)
+                    
+                    # Download category comparison
+                    csv_category = category_comparison.to_csv(index=False)
+                    st.download_button(
+                        label="📄 Download Category Comparison as CSV",
+                        data=csv_category,
+                        file_name="category_vs_options_comparison.csv",
+                        mime="text/csv"
+                    )
+            
+            # Continue with other tabs...
+            with tab3 if show_option_analysis else tab2:
                 st.markdown(f"### 📋 Complete {ranking_type} Rankings")
                 
                 # Add filters
@@ -332,7 +552,7 @@ def main():
                 else:
                     st.warning("No data matches the current filters.")
             
-            with tab3:
+            with tab4 if show_option_analysis else tab3:
                 st.markdown(f"### 🏆 Top 10 {ranking_type}s")
                 top_10 = results_df.head(10)
                 
@@ -355,7 +575,7 @@ def main():
                         
                         st.divider()
             
-            with tab4:
+            with tab5 if show_option_analysis else tab4:
                 st.markdown(f"### 📉 Bottom 10 {ranking_type}s")
                 bottom_10 = results_df.tail(10)
                 
@@ -393,46 +613,70 @@ def main():
             
             # Download section
             st.markdown("### 💾 Export Results")
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             
             with col1:
                 # CSV download
                 csv = results_df.to_csv(index=False)
                 st.download_button(
-                    label="📄 Download as CSV",
+                    label="📄 Download Rankings as CSV",
                     data=csv,
                     file_name=f"{ranking_type.lower()}_metrics_ranking.csv",
                     mime="text/csv"
                 )
             
             with col2:
-                # Excel download
-                excel_buffer = pd.ExcelWriter('temp_output.xlsx', engine='xlsxwriter')
-                results_df.to_excel(excel_buffer, sheet_name=f'{ranking_type}_Rankings', index=False)
-                
-                # Add summary sheet
-                summary_df = pd.DataFrame([summary_stats])
-                summary_df.to_excel(excel_buffer, sheet_name='Summary', index=False)
-                
-                excel_buffer.close()
-                
-                with open('temp_output.xlsx', 'rb') as f:
+                # Excel download with multiple sheets
+                excel_temp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as excel_tmp_file:
+                        excel_temp_path = excel_tmp_file.name
+                        with pd.ExcelWriter(excel_temp_path, engine='xlsxwriter') as excel_buffer:
+                            results_df.to_excel(excel_buffer, sheet_name=f'{ranking_type}_Rankings', index=False)
+                            
+                            # Add summary sheet
+                            summary_df = pd.DataFrame([summary_stats])
+                            summary_df.to_excel(excel_buffer, sheet_name='Summary', index=False)
+                            
+                            # Add option analysis if enabled
+                            if show_option_analysis:
+                                option_summary = analyzer.get_option_summary_table(option_distribution)
+                                option_summary.to_excel(excel_buffer, sheet_name='Option_Analysis', index=False)
+                    
+                    with open(excel_temp_path, 'rb') as f:
+                        st.download_button(
+                            label="📊 Download Complete Analysis",
+                            data=f.read(),
+                            file_name=f"{ranking_type.lower()}_complete_analysis.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                finally:
+                    # Clean up Excel temp file
+                    if excel_temp_path:
+                        safe_remove_temp_file(excel_temp_path)
+            
+            with col3:
+                # Status analytics as JSON
+                if show_option_analysis:
+                    import json
+                    json_data = json.dumps(status_analytics, indent=2, default=str)
                     st.download_button(
-                        label="📊 Download as Excel",
-                        data=f.read(),
-                        file_name=f"{ranking_type.lower()}_metrics_ranking.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        label="📋 Download Status Analytics",
+                        data=json_data,
+                        file_name="status_analytics.json",
+                        mime="application/json"
                     )
-                
-                # Clean up temp file
-                if os.path.exists('temp_output.xlsx'):
-                    os.remove('temp_output.xlsx')
             
         except FileNotFoundError as e:
             st.error(f"📁 File not found: {str(e)}")
         except Exception as e:
             st.error(f"❌ An error occurred: {str(e)}")
             st.exception(e)  # Show detailed error for debugging
+        
+        finally:
+            # Clean up temp file in finally block
+            if temp_file_path:
+                safe_remove_temp_file(temp_file_path)
     
     else:
         # Welcome message
@@ -449,10 +693,31 @@ def main():
             sample_data = pd.DataFrame({
                 'vehicle_name': ['Truck_001', 'Truck_002', 'Truck_001'],
                 'operator_name': ['John_Doe', 'Jane_Smith', 'John_Doe'],
-                'status': ['OPERATION', 'BREAKDOWN', 'DELAY'],
+                'status': ['READY', 'BREAKDOWN', 'DELAY'],
                 'duration': ['2:30:00', '1:15:30', '0:45:00']
             })
             st.dataframe(sample_data, use_container_width=True)
+            
+        # Coal hauling status options
+        with st.expander("🏭 Coal Hauling Status Options"):
+            st.markdown("""
+            **READY Status Options:**
+            - Coal Hauling
+            
+            **IDLE Status Options:**
+            - Hujan (Rain)
+            - Demo
+            
+            **DELAY Status Options:**
+            - Antrian Jembatan Timbang, Fatigue Test, Internal Problem
+            - Jembatan Timbang Bermasalah, Jetty Crowded, Makan/Istirahat
+            - P2H, P5M, Pembersihan Unit, Pengisian Bahan Bakar
+            - And 10+ more operational delay categories
+            
+            **BREAKDOWN Status Options:**
+            - Periodic Inspection, Schedule Maintenance
+            - Tire Maintenance, Unschedule Maintenance
+            """)
 
 if __name__ == "__main__":
     main()

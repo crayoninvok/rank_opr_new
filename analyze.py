@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class VehicleMetricsAnalyzer:
-    """Enhanced class for analyzing vehicle and operator performance metrics."""
+    """Enhanced class for analyzing vehicle and operator performance metrics - Coal Hauling Operations."""
     
     def __init__(self, mohh: float = 168.0):
         """
@@ -98,7 +98,7 @@ class VehicleMetricsAnalyzer:
     
     def preprocess_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Preprocess the input data.
+        Preprocess the input data with coal hauling specific status mapping.
         
         Args:
             df (pd.DataFrame): Raw input DataFrame
@@ -119,9 +119,50 @@ class VehicleMetricsAnalyzer:
         # Remove rows with invalid duration
         df = df[df['duration_hours'] >= 0]
         
-        # Standardize status values - more comprehensive mapping
+        # Coal Hauling specific status mapping
         status_mapping = {
-            # Breakdown variations
+            # READY status -> OPERATION (vehicle is ready and operational)
+            'READY': 'OPERATION',
+            'COAL HAULING': 'OPERATION',
+            
+            # IDLE status -> DELAY (vehicle is idle but available)
+            'IDLE': 'DELAY',
+            'HUJAN': 'DELAY',  # Rain
+            'DEMO': 'DELAY',   # Demo
+            
+            # DELAY status -> DELAY (all delay subcategories)
+            'DELAY': 'DELAY',
+            'ANTRIAN JEMBATAN TIMBANG': 'DELAY',  # Weighbridge queue
+            'FATIGUE TEST (PENGECEKAN SAFETY)': 'DELAY',  # Fatigue test (safety check)
+            'INTERNAL PROBLEM': 'DELAY',
+            'JEMBATAN TIMBANG BERMASALAH': 'DELAY',  # Weighbridge problem
+            'JETTY CROWDED (OVERCAPACITY)': 'DELAY',  # Jetty overcapacity
+            'MAKAN/ISTIRAHAT/FATIGUE/IBADAH': 'DELAY',  # Meal/rest/fatigue/prayer
+            'P2H': 'DELAY',  # Pre-shift inspection
+            'P5M': 'DELAY',  # 5-minute safety talk
+            'PEMBERSIHAN UNIT': 'DELAY',  # Unit cleaning
+            'PENGISIAN BAHAN BAKAR': 'DELAY',  # Fuel filling
+            'PERBAIKAN JALAN': 'DELAY',  # Road repair
+            'SAFETY TALK': 'DELAY',
+            'SIDE DUMP BERMASALAH': 'DELAY',  # Side dump problem
+            'TUNGGU ALAT LOADING': 'DELAY',  # Waiting for loading equipment
+            'TUNGGU LOGIN': 'DELAY',  # Waiting for login
+            'TUNGGU OPERATOR DOUBLE TRAILER': 'DELAY',  # Waiting for double trailer operator
+            'TUNGGU PETUGAS SIDE DUMP': 'DELAY',  # Waiting for side dump officer
+            'TUNGGU STOCK BATUBARA COALPAD': 'DELAY',  # Waiting for coal stock at coalpad
+            'TUNGGU TONGKANG JETTY': 'DELAY',  # Waiting for barge at jetty
+            'WORKSHOP BERMASALAH (SELIP, STUCK)': 'DELAY',  # Workshop problem (slip, stuck)
+            
+            # BREAKDOWN status -> BREAKDOWN (all maintenance categories)
+            'BREAKDOWN': 'BREAKDOWN',
+            'PERIODIC INSPECTION': 'BREAKDOWN',
+            'SCHEDULE MAINTENANCE': 'BREAKDOWN',
+            'SCHEDULED MAINTENANCE': 'BREAKDOWN',
+            'TIRE MAINTENANCE': 'BREAKDOWN',
+            'UNSCHEDULE MAINTENANCE': 'BREAKDOWN',
+            'UNSCHEDULED MAINTENANCE': 'BREAKDOWN',
+            
+            # Additional common variations
             'BREAK DOWN': 'BREAKDOWN',
             'BREAK-DOWN': 'BREAKDOWN',
             'BREAK_DOWN': 'BREAKDOWN',
@@ -139,7 +180,6 @@ class VehicleMetricsAnalyzer:
             'IN SERVICE': 'OPERATION',
             'WORKING': 'OPERATION',
             'AVAILABLE': 'OPERATION',
-            'READY': 'OPERATION',
             'ON DUTY': 'OPERATION',
             'SERVICE': 'OPERATION',
             'NORMAL': 'OPERATION',
@@ -149,13 +189,14 @@ class VehicleMetricsAnalyzer:
             # Delay variations
             'DELAYED': 'DELAY',
             'WAITING': 'DELAY',
-            'IDLE': 'DELAY',
             'STANDBY': 'DELAY',
             'PAUSE': 'DELAY',
             'PAUSED': 'DELAY',
             'HOLD': 'DELAY',
             'PENDING': 'DELAY'
         }
+        
+        # Apply status mapping
         df['status'] = df['status'].replace(status_mapping)
         
         # Log unique status values for debugging
@@ -196,21 +237,6 @@ class VehicleMetricsAnalyzer:
             if status not in status_hours.columns:
                 status_hours[status] = 0.0
                 logger.info(f"Added missing status column: {status}")
-        
-        # If no OPERATION data found, try to infer from other statuses or data patterns
-        if status_hours['OPERATION'].sum() == 0:
-            logger.warning("No OPERATION status found. Checking for alternative operational indicators...")
-            
-            # Check if there are other status values that might represent operations
-            other_statuses = [col for col in status_hours.columns if col not in ['BREAKDOWN', 'DELAY', 'OPERATION']]
-            if other_statuses:
-                logger.info(f"Found other status values: {other_statuses}")
-                
-                # Sum all non-breakdown, non-delay statuses as operational
-                operational_cols = [col for col in other_statuses if col not in ['UNKNOWN', 'NULL', 'NONE', '']]
-                if operational_cols:
-                    status_hours['OPERATION'] = status_hours[operational_cols].sum(axis=1)
-                    logger.info(f"Converted {operational_cols} to OPERATION status")
         
         # Calculate metrics
         results = pd.DataFrame({
@@ -286,6 +312,529 @@ class VehicleMetricsAnalyzer:
             'best_performer': results_df.iloc[0][results_df.columns[1]] if len(results_df) > 0 else 'N/A',
             'worst_performer': results_df.iloc[-1][results_df.columns[1]] if len(results_df) > 0 else 'N/A'
         }
+    
+    def get_status_analytics(self, df: pd.DataFrame, group_by: str = 'vehicle_name') -> Dict[str, Any]:
+        """
+        Get comprehensive analytics per status and per option.
+        
+        Args:
+            df (pd.DataFrame): Raw DataFrame (before preprocessing)
+            group_by (str): Column to group by
+            
+        Returns:
+            Dict[str, Any]: Comprehensive status analytics
+        """
+        # Process the data to get duration in hours
+        df_analysis = df.copy()
+        df_analysis['duration_hours'] = df_analysis['duration'].apply(self.parse_duration)
+        df_analysis['status'] = df_analysis['status'].fillna('UNKNOWN').astype(str).str.upper().str.strip()
+        
+        # Define status categories with their options
+        status_categories = {
+            'READY': ['COAL HAULING'],
+            'IDLE': ['HUJAN', 'DEMO'],
+            'DELAY': [
+                'ANTRIAN JEMBATAN TIMBANG', 'FATIGUE TEST (PENGECEKAN SAFETY)',
+                'INTERNAL PROBLEM', 'JEMBATAN TIMBANG BERMASALAH',
+                'JETTY CROWDED (OVERCAPACITY)', 'MAKAN/ISTIRAHAT/FATIGUE/IBADAH',
+                'P2H', 'P5M', 'PEMBERSIHAN UNIT', 'PENGISIAN BAHAN BAKAR',
+                'PERBAIKAN JALAN', 'SAFETY TALK', 'SIDE DUMP BERMASALAH',
+                'TUNGGU ALAT LOADING', 'TUNGGU LOGIN', 'TUNGGU OPERATOR DOUBLE TRAILER',
+                'TUNGGU PETUGAS SIDE DUMP', 'TUNGGU STOCK BATUBARA COALPAD',
+                'TUNGGU TONGKANG JETTY', 'WORKSHOP BERMASALAH (SELIP, STUCK)'
+            ],
+            'BREAKDOWN': [
+                'PERIODIC INSPECTION', 'SCHEDULE MAINTENANCE',
+                'TIRE MAINTENANCE', 'UNSCHEDULE MAINTENANCE'
+            ]
+        }
+        
+        analytics = {}
+        
+        # 1. Overall status distribution (main categories)
+        status_summary = df_analysis.groupby('status').agg({
+            'duration_hours': ['sum', 'mean', 'count'],
+            group_by: 'nunique'
+        }).round(2)
+        status_summary.columns = ['total_hours', 'avg_duration', 'frequency', 'unique_units']
+        status_summary['percentage_of_total_time'] = (
+            status_summary['total_hours'] / status_summary['total_hours'].sum() * 100
+        ).round(2)
+        
+        analytics['status_summary'] = status_summary.to_dict('index')
+        
+        # 2. Detailed breakdown by unit and status
+        unit_status_breakdown = df_analysis.groupby([group_by, 'status'])['duration_hours'].sum().unstack(fill_value=0)
+        analytics['unit_status_breakdown'] = unit_status_breakdown.to_dict('index')
+        
+        # 3. Analytics per status category and their options
+        category_analytics = {}
+        
+        for main_status, options in status_categories.items():
+            category_data = {}
+            
+            # Main status analytics
+            main_status_data = df_analysis[df_analysis['status'] == main_status]
+            if not main_status_data.empty:
+                category_data['main_status'] = {
+                    'total_hours': main_status_data['duration_hours'].sum().round(2),
+                    'frequency': len(main_status_data),
+                    'avg_duration': main_status_data['duration_hours'].mean().round(2),
+                    'unique_units': main_status_data[group_by].nunique(),
+                    'percentage_of_total': (main_status_data['duration_hours'].sum() / 
+                                          df_analysis['duration_hours'].sum() * 100).round(2)
+                }
+                
+                # Unit-wise breakdown for this status
+                unit_breakdown = main_status_data.groupby(group_by)['duration_hours'].sum().to_dict()
+                category_data['unit_breakdown'] = {k: round(v, 2) for k, v in unit_breakdown.items()}
+            
+            # Options analytics for this status
+            options_data = {}
+            status_total_hours = df_analysis[df_analysis['status'].isin([main_status] + options)]['duration_hours'].sum()
+            
+            for option in options:
+                option_data = df_analysis[df_analysis['status'] == option]
+                if not option_data.empty:
+                    options_data[option] = {
+                        'total_hours': option_data['duration_hours'].sum().round(2),
+                        'frequency': len(option_data),
+                        'avg_duration': option_data['duration_hours'].mean().round(2),
+                        'unique_units': option_data[group_by].nunique(),
+                        'percentage_of_status_category': (
+                            option_data['duration_hours'].sum() / max(status_total_hours, 0.001) * 100
+                        ).round(2) if status_total_hours > 0 else 0,
+                        'percentage_of_total': (
+                            option_data['duration_hours'].sum() / df_analysis['duration_hours'].sum() * 100
+                        ).round(2)
+                    }
+                    
+                    # Unit-wise breakdown for this option
+                    unit_breakdown = option_data.groupby(group_by)['duration_hours'].sum().to_dict()
+                    options_data[option]['unit_breakdown'] = {k: round(v, 2) for k, v in unit_breakdown.items()}
+            
+            if options_data:
+                category_data['options'] = options_data
+                
+            category_analytics[main_status] = category_data
+        
+        analytics['category_analytics'] = category_analytics
+        
+        # 4. Top issues analysis (most time-consuming statuses/options)
+        all_statuses = df_analysis.groupby('status')['duration_hours'].sum().sort_values(ascending=False)
+        analytics['top_time_consumers'] = {
+            status: {
+                'hours': round(hours, 2),
+                'percentage': round(hours / df_analysis['duration_hours'].sum() * 100, 2)
+            }
+            for status, hours in all_statuses.head(10).items()
+        }
+        
+        # 5. Unit performance comparison
+        unit_performance = {}
+        for unit in df_analysis[group_by].unique():
+            unit_data = df_analysis[df_analysis[group_by] == unit]
+            unit_performance[unit] = {
+                'total_hours': unit_data['duration_hours'].sum().round(2),
+                'status_distribution': unit_data.groupby('status')['duration_hours'].sum().round(2).to_dict(),
+                'most_common_status': unit_data.groupby('status')['duration_hours'].sum().idxmax(),
+                'total_records': len(unit_data)
+            }
+        
+        analytics['unit_performance'] = unit_performance
+        
+        # 6. Summary statistics
+        analytics['summary_stats'] = {
+            'total_records': len(df_analysis),
+            'total_hours': df_analysis['duration_hours'].sum().round(2),
+            'unique_units': df_analysis[group_by].nunique(),
+            'unique_statuses': df_analysis['status'].nunique(),
+            'avg_duration_per_record': df_analysis['duration_hours'].mean().round(2),
+            'date_range': {
+                'start': df_analysis.index.min() if hasattr(df_analysis.index, 'min') else 'N/A',
+                'end': df_analysis.index.max() if hasattr(df_analysis.index, 'max') else 'N/A'
+            } if 'date' in df_analysis.columns else 'No date column found'
+        }
+        
+        return analytics
+    
+    def print_status_analytics(self, analytics: Dict[str, Any]) -> None:
+        """
+        Print formatted status analytics report.
+        
+        Args:
+            analytics (Dict[str, Any]): Analytics from get_status_analytics()
+        """
+        print("=" * 80)
+        print("COMPREHENSIVE STATUS ANALYTICS REPORT")
+        print("=" * 80)
+        
+        # Summary
+        print(f"\n📊 SUMMARY STATISTICS")
+        print("-" * 40)
+        summary = analytics['summary_stats']
+        print(f"Total Records: {summary['total_records']:,}")
+        print(f"Total Hours: {summary['total_hours']:,.2f}")
+        print(f"Unique Units: {summary['unique_units']}")
+        print(f"Unique Statuses: {summary['unique_statuses']}")
+        print(f"Average Duration per Record: {summary['avg_duration_per_record']:.2f} hours")
+        
+        # Status Summary
+        print(f"\n📋 STATUS OVERVIEW")
+        print("-" * 40)
+        for status, data in analytics['status_summary'].items():
+            print(f"{status}:")
+            print(f"  Total Hours: {data['total_hours']:,.2f} ({data['percentage_of_total_time']:.1f}%)")
+            print(f"  Frequency: {data['frequency']:,} records")
+            print(f"  Average Duration: {data['avg_duration']:.2f} hours")
+            print(f"  Units Affected: {data['unique_units']}")
+            print()
+        
+        # Detailed Category Analytics
+        print(f"\n🔍 DETAILED CATEGORY ANALYTICS")
+        print("-" * 40)
+        
+        for category, data in analytics['category_analytics'].items():
+            print(f"\n{category.upper()} CATEGORY:")
+            
+            if 'main_status' in data:
+                main = data['main_status']
+                print(f"  Main Status Total: {main['total_hours']:,.2f} hours ({main['percentage_of_total']:.1f}%)")
+            
+            if 'options' in data:
+                print(f"  Options Breakdown:")
+                for option, option_data in data['options'].items():
+                    print(f"    • {option}:")
+                    print(f"      Hours: {option_data['total_hours']:,.2f} ({option_data['percentage_of_total']:.1f}% total, {option_data['percentage_of_status_category']:.1f}% of category)")
+                    print(f"      Frequency: {option_data['frequency']:,} records")
+                    print(f"      Avg Duration: {option_data['avg_duration']:.2f} hours")
+                    print(f"      Units: {option_data['unique_units']}")
+        
+        # Top Time Consumers
+        print(f"\n⏰ TOP TIME CONSUMERS")
+        print("-" * 40)
+        for i, (status, data) in enumerate(analytics['top_time_consumers'].items(), 1):
+            print(f"{i:2d}. {status}: {data['hours']:,.2f} hours ({data['percentage']:.1f}%)")
+        
+        print("=" * 80)
+    
+    def get_option_distribution(self, df: pd.DataFrame, group_by: str = 'vehicle_name') -> Dict[str, Any]:
+        """
+        Get detailed distribution analysis per option with comprehensive breakdowns.
+        
+        Args:
+            df (pd.DataFrame): Raw DataFrame (before preprocessing)
+            group_by (str): Column to group by
+            
+        Returns:
+            Dict[str, Any]: Option-level distribution analytics
+        """
+        # Process the data to get duration in hours
+        df_analysis = df.copy()
+        df_analysis['duration_hours'] = df_analysis['duration'].apply(self.parse_duration)
+        df_analysis['status'] = df_analysis['status'].fillna('UNKNOWN').astype(str).str.upper().str.strip()
+        
+        # Define all options by category
+        status_options = {
+            'READY': ['COAL HAULING'],
+            'IDLE': ['HUJAN', 'DEMO'],
+            'DELAY': [
+                'ANTRIAN JEMBATAN TIMBANG', 'FATIGUE TEST (PENGECEKAN SAFETY)',
+                'INTERNAL PROBLEM', 'JEMBATAN TIMBANG BERMASALAH',
+                'JETTY CROWDED (OVERCAPACITY)', 'MAKAN/ISTIRAHAT/FATIGUE/IBADAH',
+                'P2H', 'P5M', 'PEMBERSIHAN UNIT', 'PENGISIAN BAHAN BAKAR',
+                'PERBAIKAN JALAN', 'SAFETY TALK', 'SIDE DUMP BERMASALAH',
+                'TUNGGU ALAT LOADING', 'TUNGGU LOGIN', 'TUNGGU OPERATOR DOUBLE TRAILER',
+                'TUNGGU PETUGAS SIDE DUMP', 'TUNGGU STOCK BATUBARA COALPAD',
+                'TUNGGU TONGKANG JETTY', 'WORKSHOP BERMASALAH (SELIP, STUCK)'
+            ],
+            'BREAKDOWN': [
+                'PERIODIC INSPECTION', 'SCHEDULE MAINTENANCE',
+                'TIRE MAINTENANCE', 'UNSCHEDULE MAINTENANCE'
+            ]
+        }
+        
+        total_hours = df_analysis['duration_hours'].sum()
+        option_distribution = {}
+        
+        # Analyze each option
+        for category, options in status_options.items():
+            # Include main status if it exists in data
+            all_statuses_in_category = [category] + options
+            
+            for status in all_statuses_in_category:
+                status_data = df_analysis[df_analysis['status'] == status]
+                
+                if not status_data.empty:
+                    # Overall statistics
+                    status_total_hours = status_data['duration_hours'].sum()
+                    
+                    option_distribution[status] = {
+                        'category': category,
+                        'total_hours': round(status_total_hours, 2),
+                        'percentage_of_total': round((status_total_hours / total_hours) * 100, 2),
+                        'frequency': len(status_data),
+                        'avg_duration_hours': round(status_data['duration_hours'].mean(), 2),
+                        'unique_units_affected': status_data[group_by].nunique(),
+                        
+                        # Unit-wise breakdown
+                        'unit_breakdown': {},
+                        'unit_percentages': {},
+                        
+                        # Time distribution
+                        'min_duration': round(status_data['duration_hours'].min(), 2),
+                        'max_duration': round(status_data['duration_hours'].max(), 2),
+                        'median_duration': round(status_data['duration_hours'].median(), 2),
+                        
+                        # Affected units details
+                        'units_affected': list(status_data[group_by].unique())
+                    }
+                    
+                    # Calculate per-unit breakdown
+                    unit_breakdown = status_data.groupby(group_by)['duration_hours'].agg(['sum', 'count', 'mean']).round(2)
+                    
+                    for unit in unit_breakdown.index:
+                        unit_total = unit_breakdown.loc[unit, 'sum']
+                        unit_count = unit_breakdown.loc[unit, 'count']
+                        unit_avg = unit_breakdown.loc[unit, 'mean']
+                        
+                        option_distribution[status]['unit_breakdown'][unit] = {
+                            'hours': unit_total,
+                            'frequency': int(unit_count),
+                            'avg_duration': unit_avg,
+                            'percentage_of_option_total': round((unit_total / status_total_hours) * 100, 2)
+                        }
+        
+        # Sort by total hours (descending)
+        option_distribution = dict(sorted(
+            option_distribution.items(), 
+            key=lambda x: x[1]['total_hours'], 
+            reverse=True
+        ))
+        
+        return option_distribution
+    
+    def print_option_distribution(self, option_distribution: Dict[str, Any], top_n: int = None) -> None:
+        """
+        Print formatted option distribution report.
+        
+        Args:
+            option_distribution (Dict[str, Any]): Option distribution from get_option_distribution()
+            top_n (int): Show only top N options (None for all)
+        """
+        print("=" * 100)
+        print("DETAILED OPTION DISTRIBUTION ANALYSIS")
+        print("=" * 100)
+        
+        options_to_show = list(option_distribution.items())
+        if top_n:
+            options_to_show = options_to_show[:top_n]
+            print(f"\n🔝 TOP {top_n} OPTIONS BY TOTAL HOURS")
+        else:
+            print(f"\n📊 ALL OPTIONS DISTRIBUTION ({len(options_to_show)} total)")
+        
+        print("-" * 100)
+        
+        for rank, (option, data) in enumerate(options_to_show, 1):
+            print(f"\n{rank:2d}. {option} [{data['category']} CATEGORY]")
+            print(f"    {'─' * 60}")
+            print(f"    📊 Total Hours: {data['total_hours']:,.2f} ({data['percentage_of_total']:.1f}% of all time)")
+            print(f"    🔄 Frequency: {data['frequency']:,} occurrences")
+            print(f"    ⏱️  Average Duration: {data['avg_duration_hours']:.2f} hours")
+            print(f"    🚛 Units Affected: {data['unique_units_affected']} units")
+            print(f"    📈 Duration Range: {data['min_duration']:.2f}h - {data['max_duration']:.2f}h (median: {data['median_duration']:.2f}h)")
+            
+            # Show top 5 most affected units for this option
+            if data['unit_breakdown']:
+                print(f"    🎯 Most Affected Units:")
+                unit_sorted = sorted(data['unit_breakdown'].items(), 
+                                   key=lambda x: x[1]['hours'], reverse=True)
+                for unit, unit_data in unit_sorted[:5]:  # Top 5 units
+                    print(f"       • {unit}: {unit_data['hours']:.2f}h ({unit_data['percentage_of_option_total']:.1f}%) "
+                          f"- {unit_data['frequency']} times, avg {unit_data['avg_duration']:.2f}h")
+                
+                if len(unit_sorted) > 5:
+                    print(f"       ... and {len(unit_sorted) - 5} more units")
+            
+            print()
+    
+    def get_option_summary_table(self, option_distribution: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Create a summary table of option distribution for easy export/analysis.
+        
+        Args:
+            option_distribution (Dict[str, Any]): Option distribution data
+            
+        Returns:
+            pd.DataFrame: Summary table
+        """
+        summary_data = []
+        
+        for option, data in option_distribution.items():
+            summary_data.append({
+                'rank': len(summary_data) + 1,
+                'option': option,
+                'category': data['category'],
+                'total_hours': data['total_hours'],
+                'percentage_of_total': data['percentage_of_total'],
+                'frequency': data['frequency'],
+                'avg_duration_hours': data['avg_duration_hours'],
+                'unique_units_affected': data['unique_units_affected'],
+                'min_duration': data['min_duration'],
+                'max_duration': data['max_duration'],
+                'median_duration': data['median_duration'],
+                'most_affected_unit': max(data['unit_breakdown'].items(), 
+                                        key=lambda x: x[1]['hours'])[0] if data['unit_breakdown'] else 'N/A'
+            })
+        
+        return pd.DataFrame(summary_data)
+    
+    def get_category_vs_options_comparison(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compare main categories vs their options distribution.
+        
+        Args:
+            df (pd.DataFrame): Raw DataFrame
+            
+        Returns:
+            pd.DataFrame: Category vs options comparison
+        """
+        df_analysis = df.copy()
+        df_analysis['duration_hours'] = df_analysis['duration'].apply(self.parse_duration)
+        df_analysis['status'] = df_analysis['status'].fillna('UNKNOWN').astype(str).str.upper().str.strip()
+        
+        status_mapping = {
+            'READY': 'OPERATION',
+            'COAL HAULING': 'OPERATION',
+            'IDLE': 'DELAY',
+            'HUJAN': 'DELAY',
+            'DEMO': 'DELAY',
+            'DELAY': 'DELAY'
+        }
+        
+        # Map delay options
+        delay_options = [
+            'ANTRIAN JEMBATAN TIMBANG', 'FATIGUE TEST (PENGECEKAN SAFETY)',
+            'INTERNAL PROBLEM', 'JEMBATAN TIMBANG BERMASALAH',
+            'JETTY CROWDED (OVERCAPACITY)', 'MAKAN/ISTIRAHAT/FATIGUE/IBADAH',
+            'P2H', 'P5M', 'PEMBERSIHAN UNIT', 'PENGISIAN BAHAN BAKAR',
+            'PERBAIKAN JALAN', 'SAFETY TALK', 'SIDE DUMP BERMASALAH',
+            'TUNGGU ALAT LOADING', 'TUNGGU LOGIN', 'TUNGGU OPERATOR DOUBLE TRAILER',
+            'TUNGGU PETUGAS SIDE DUMP', 'TUNGGU STOCK BATUBARA COALPAD',
+            'TUNGGU TONGKANG JETTY', 'WORKSHOP BERMASALAH (SELIP, STUCK)'
+        ]
+        
+        breakdown_options = [
+            'PERIODIC INSPECTION', 'SCHEDULE MAINTENANCE',
+            'TIRE MAINTENANCE', 'UNSCHEDULE MAINTENANCE'
+        ]
+        
+        for option in delay_options:
+            status_mapping[option] = 'DELAY'
+        for option in breakdown_options:
+            status_mapping[option] = 'BREAKDOWN'
+        
+        # Create comparison
+        comparison_data = []
+        total_hours = df_analysis['duration_hours'].sum()
+        
+        # Group by mapped categories
+        df_analysis['mapped_status'] = df_analysis['status'].map(status_mapping).fillna('OTHER')
+        category_totals = df_analysis.groupby('mapped_status')['duration_hours'].sum()
+        
+        for category in ['OPERATION', 'DELAY', 'BREAKDOWN']:
+            category_total = category_totals.get(category, 0)
+            category_percentage = (category_total / total_hours * 100) if total_hours > 0 else 0
+            
+            comparison_data.append({
+                'type': 'CATEGORY',
+                'name': category,
+                'total_hours': round(category_total, 2),
+                'percentage': round(category_percentage, 2),
+                'frequency': len(df_analysis[df_analysis['mapped_status'] == category])
+            })
+            
+            # Add individual options for this category
+            category_statuses = df_analysis[df_analysis['mapped_status'] == category]
+            option_breakdown = category_statuses.groupby('status')['duration_hours'].agg(['sum', 'count'])
+            
+            for status, data in option_breakdown.iterrows():
+                option_hours = data['sum']
+                option_percentage = (option_hours / total_hours * 100) if total_hours > 0 else 0
+                option_freq = data['count']
+                
+                comparison_data.append({
+                    'type': 'OPTION',
+                    'name': f"  └─ {status}",
+                    'total_hours': round(option_hours, 2),
+                    'percentage': round(option_percentage, 2),
+                    'frequency': int(option_freq)
+                })
+        
+        return pd.DataFrame(comparison_data)
+        """
+        Get detailed breakdown of all status categories before mapping.
+        
+        Args:
+            df (pd.DataFrame): Preprocessed DataFrame
+            group_by (str): Column to group by
+            
+        Returns:
+            pd.DataFrame: Detailed status breakdown
+        """
+        # Create a copy to preserve original status before mapping
+        df_original = df.copy()
+        
+        # Get detailed breakdown by original status
+        detailed_breakdown = df_original.groupby([group_by, 'status'])['duration_hours'].sum().unstack(fill_value=0)
+        
+        return detailed_breakdown
+
+def analyze_excel_file_comprehensive(excel_file: str, group_by: str = 'vehicle_name', mohh: float = 168.0) -> Tuple[pd.DataFrame, Dict[str, Any], Dict[str, Any]]:
+    """
+    Comprehensive analysis function that returns metrics, summary, and detailed status analytics.
+    
+    Args:
+        excel_file (str): Path to Excel file
+        group_by (str): Column to group by
+        mohh (float): Maximum operating hours per hour
+        
+    Returns:
+        Tuple[pd.DataFrame, Dict[str, Any], Dict[str, Any]]: (results_df, summary_stats, status_analytics)
+    """
+    try:
+        # Initialize analyzer
+        analyzer = VehicleMetricsAnalyzer(mohh=mohh)
+        
+        # Load data
+        df = pd.read_excel(excel_file)
+        logger.info(f"Loaded {len(df)} rows from {excel_file}")
+        
+        # Validate data
+        is_valid, error_msg = analyzer.validate_data(df)
+        if not is_valid:
+            raise ValueError(error_msg)
+        
+        # Get detailed status analytics BEFORE preprocessing (to preserve original statuses)
+        status_analytics = analyzer.get_status_analytics(df, group_by)
+        
+        # Preprocess data
+        df_processed = analyzer.preprocess_data(df)
+        logger.info(f"Processed data: {len(df_processed)} valid rows")
+        
+        # Calculate metrics
+        results = analyzer.calculate_metrics(df_processed, group_by)
+        
+        # Get summary statistics
+        summary = analyzer.get_summary_statistics(results)
+        
+        return results, summary, status_analytics
+        
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Excel file '{excel_file}' not found.")
+    except Exception as e:
+        logger.error(f"Error analyzing file: {e}")
+        raise
 
 def analyze_excel_file(excel_file: str, group_by: str = 'vehicle_name', mohh: float = 168.0) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """

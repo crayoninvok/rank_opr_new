@@ -3,4 +3,4 @@ numpy
 openpyxl
 xlsxwriter
 streamlit
-plotlygit remote add origin https://github.com/crayoninvok/rank_opr.git
+plotly
