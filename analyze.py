@@ -430,14 +430,22 @@ class VehicleMetricsAnalyzer:
             for status, hours in all_statuses.head(10).items()
         }
         
-        # 5. Unit performance comparison
+        # 5. Unit performance comparison - FIXED: Handle empty status groups
         unit_performance = {}
         for unit in df_analysis[group_by].unique():
             unit_data = df_analysis[df_analysis[group_by] == unit]
+            status_hours = unit_data.groupby('status')['duration_hours'].sum()
+            
+            # FIX: Check if status_hours is empty before calling idxmax()
+            if len(status_hours) > 0:
+                most_common = status_hours.idxmax()
+            else:
+                most_common = 'N/A'
+            
             unit_performance[unit] = {
                 'total_hours': unit_data['duration_hours'].sum().round(2),
-                'status_distribution': unit_data.groupby('status')['duration_hours'].sum().round(2).to_dict(),
-                'most_common_status': unit_data.groupby('status')['duration_hours'].sum().idxmax(),
+                'status_distribution': status_hours.round(2).to_dict(),
+                'most_common_status': most_common,
                 'total_records': len(unit_data)
             }
         
@@ -772,23 +780,6 @@ class VehicleMetricsAnalyzer:
                 })
         
         return pd.DataFrame(comparison_data)
-        """
-        Get detailed breakdown of all status categories before mapping.
-        
-        Args:
-            df (pd.DataFrame): Preprocessed DataFrame
-            group_by (str): Column to group by
-            
-        Returns:
-            pd.DataFrame: Detailed status breakdown
-        """
-        # Create a copy to preserve original status before mapping
-        df_original = df.copy()
-        
-        # Get detailed breakdown by original status
-        detailed_breakdown = df_original.groupby([group_by, 'status'])['duration_hours'].sum().unstack(fill_value=0)
-        
-        return detailed_breakdown
 
 def analyze_excel_file_comprehensive(excel_file: str, group_by: str = 'vehicle_name', mohh: float = 168.0) -> Tuple[pd.DataFrame, Dict[str, Any], Dict[str, Any]]:
     """
