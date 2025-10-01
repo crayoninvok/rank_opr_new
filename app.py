@@ -149,7 +149,7 @@ def create_performance_charts(results_df, ranking_type):
     fig_hours.add_trace(go.Bar(
         name='Operation Hours',
         x=top_10[entity_col],
-        y=top_10['operation_hours'],
+        y=top_10['mohh'],
         marker_color='#28a745'
     ))
     
@@ -338,7 +338,7 @@ def style_dataframe(df):
     format_dict = {
         'breakdown_hours': '{:.1f}',
         'delay_hours': '{:.1f}',
-        'operation_hours': '{:.1f}',
+        'mohh': '{:.1f}',
         'total_hours': '{:.1f}',
         'downtime_hours': '{:.1f}',
         'PA(%)': '{:.1f}%',
@@ -367,16 +367,6 @@ def main():
             ["Vehicle", "Operator"],
             index=0,
             help="Choose whether to analyze vehicles or operators"
-        )
-        
-        # MOHH configuration
-        mohh = st.number_input(
-            "⏰ Maximum Operating Hours per Week",
-            min_value=1.0,
-            max_value=300.0,
-            value=168.0,
-            step=1.0,
-            help="Standard week has 168 hours (24h × 7 days)"
         )
         
         # Performance thresholds
@@ -432,9 +422,10 @@ def main():
                 tmp_file.write(uploaded_file.getbuffer())
                 temp_file_path = tmp_file.name
             
-            # Process data
+            # Process data with default MOHH of 168 hours
             with st.spinner('🔄 Processing data...'):
                 group_by = 'vehicle_name' if ranking_type == "Vehicle" else 'operator_name'
+                mohh = 168.0  # Fixed MOHH value
                 
                 # Use the comprehensive analyze function
                 results_df, summary_stats, status_analytics = analyze_excel_file_comprehensive(
@@ -603,7 +594,7 @@ def main():
                             suggestions.append("🔧 Focus on preventive maintenance")
                         if row['delay_hours'] > 15:
                             suggestions.append("⏱️ Optimize scheduling and workflow")
-                        if row['operation_hours'] < row['total_hours'] * 0.6:
+                        if row['mohh'] < row['total_hours'] * 0.6:
                             suggestions.append("📈 Increase operational utilization")
                         
                         if suggestions:
