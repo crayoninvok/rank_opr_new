@@ -146,13 +146,11 @@ def create_performance_charts(results_df, ranking_type):
     # 2. Hours Distribution Chart
     fig_hours = go.Figure()
     
-    # Use 'mohh' if it exists, otherwise try 'operation_hours'
-    operation_col = 'mohh' if 'mohh' in top_10.columns else 'operation_hours'
-    
+    # Use 'productive_hours' column (updated from 'mohh')
     fig_hours.add_trace(go.Bar(
-        name='Operation Hours',
+        name='Productive Hours',
         x=top_10[entity_col],
-        y=top_10[operation_col],
+        y=top_10['productive_hours'],
         marker_color='#28a745'
     ))
     
@@ -337,11 +335,11 @@ def style_dataframe(df):
     percentage_cols = ['PA(%)', 'UA(%)', 'efficiency(%)', 'availability_score']
     styled_df = df.style.applymap(highlight_performance, subset=percentage_cols)
     
-    # Format numeric columns
+    # Format numeric columns - updated to use 'productive_hours'
     format_dict = {
         'breakdown_hours': '{:.1f}',
         'delay_hours': '{:.1f}',
-        'mohh': '{:.1f}',
+        'productive_hours': '{:.1f}',  # Updated from 'mohh'
         'total_hours': '{:.1f}',
         'downtime_hours': '{:.1f}',
         'PA(%)': '{:.1f}%',
@@ -386,13 +384,17 @@ def main():
         # About section
         with st.expander("ℹ️ About This Tool"):
             st.write("""
-            **Physical Availability (PA%)**: Percentage of time equipment is not broken down
+            **Physical Availability (PA%)**: Percentage of productive time not affected by breakdowns
             
-            **Utilization Availability (UA%)**: Percentage of available time actually used
+            **Utilization Availability (UA%)**: Percentage of available time actually used productively
             
-            **Efficiency (%)**: Percentage of total logged time spent in operation
+            **Efficiency (%)**: Percentage of total logged time spent in productive operation
             
             **Availability Score**: Average of PA% and UA%
+            
+            **Productive Hours**: Time spent in active operation (formerly MOHH)
+            
+            **Total Hours**: Sum of all logged hours (productive + delay + breakdown)
             
             **Option Distribution**: Breakdown of specific issues within each status category
             """)
@@ -442,6 +444,16 @@ def main():
             # Display summary cards
             st.markdown("### 📈 Performance Overview")
             create_summary_cards(summary_stats)
+            
+            # Additional summary metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Productive Hours", f"{summary_stats['total_productive_hours']:.1f}")
+            with col2:
+                st.metric("Total Logged Hours", f"{summary_stats['total_hours']:.1f}")
+            with col3:
+                productivity_ratio = (summary_stats['total_productive_hours'] / summary_stats['total_hours'] * 100) if summary_stats['total_hours'] > 0 else 0
+                st.metric("Productivity Ratio", f"{productivity_ratio:.1f}%")
             
             # Create tabs for different views
             if show_option_analysis:
@@ -597,7 +609,7 @@ def main():
                             suggestions.append("🔧 Focus on preventive maintenance")
                         if row['delay_hours'] > 15:
                             suggestions.append("⏱️ Optimize scheduling and workflow")
-                        if row['mohh'] < row['total_hours'] * 0.6:
+                        if row['productive_hours'] < row['total_hours'] * 0.6:
                             suggestions.append("📈 Increase operational utilization")
                         
                         if suggestions:
@@ -711,6 +723,28 @@ def main():
             **BREAKDOWN Status Options:**
             - Periodic Inspection, Schedule Maintenance
             - Tire Maintenance, Unschedule Maintenance
+            """)
+        
+        # Metrics explanation
+        with st.expander("📊 Understanding the Metrics"):
+            st.markdown("""
+            **Productive Hours**: Time spent in active coal hauling operations (previously called MOHH)
+            
+            **Total Hours**: Sum of all logged time (productive + delay + breakdown)
+            
+            **Physical Availability (PA%)**: 
+            - Formula: `(Productive Hours - Breakdown Hours) / Productive Hours × 100`
+            - Measures: Equipment reliability and maintenance effectiveness
+            
+            **Utilization Availability (UA%)**:
+            - Formula: `(Available Hours - Delay Hours) / Available Hours × 100`
+            - Measures: How efficiently available time is used
+            
+            **Efficiency (%)**:
+            - Formula: `Productive Hours / Total Hours × 100`
+            - Measures: Overall productivity ratio
+            
+            **Availability Score**: Average of PA% and UA% for overall performance ranking
             """)
 
 if __name__ == "__main__":

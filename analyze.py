@@ -12,7 +12,11 @@ class VehicleMetricsAnalyzer:
     """Enhanced class for analyzing vehicle and operator performance metrics - Coal Hauling Operations."""
     
     def __init__(self, mohh: float = 168.0):
-        """Initialize the analyzer."""
+        """Initialize the analyzer.
+        
+        Args:
+            mohh: Maximum Operating Hours per period (default 168 hours/week)
+        """
         self.mohh = mohh
         self.required_columns = ['vehicle_name', 'operator_name', 'status', 'duration']
         
@@ -169,7 +173,12 @@ class VehicleMetricsAnalyzer:
         return df
     
     def calculate_metrics(self, df: pd.DataFrame, group_by: str = 'vehicle_name') -> pd.DataFrame:
-        """Calculate performance metrics for vehicles or operators."""
+        """Calculate performance metrics for vehicles or operators.
+        
+        IMPORTANT: 
+        - total_hours = sum of ALL status hours (OPERATION + DELAY + BREAKDOWN)
+        - productive_hours = OPERATION hours only (renamed from mohh)
+        """
         if group_by not in ['vehicle_name', 'operator_name']:
             raise ValueError("group_by must be 'vehicle_name' or 'operator_name'")
         
@@ -205,30 +214,32 @@ class VehicleMetricsAnalyzer:
                 status_hours[status] = 0.0
                 logger.warning(f"  Added missing column: {status}")
         
-        # Build results dataframe
+        # Build results dataframe with corrected naming
         results = pd.DataFrame({
             group_by: status_hours.index,
             'breakdown_hours': status_hours['BREAKDOWN'],
             'delay_hours': status_hours['DELAY'],
-            'mohh': status_hours['OPERATION'],
-            'total_hours': status_hours.sum(axis=1)
+            'productive_hours': status_hours['OPERATION'],  # RENAMED from mohh
+            'total_hours': status_hours.sum(axis=1)  # FIXED: sum of all statuses
         })
         
         logger.info(f"\nResults summary:")
         logger.info(f"  Breakdown hours: {results['breakdown_hours'].sum():.2f}")
         logger.info(f"  Delay hours: {results['delay_hours'].sum():.2f}")
-        logger.info(f"  Operation hours: {results['mohh'].sum():.2f}")
+        logger.info(f"  Productive hours: {results['productive_hours'].sum():.2f}")
         logger.info(f"  Total hours: {results['total_hours'].sum():.2f}")
         
-        # Calculate PA%
+        # Calculate PA% - Physical Availability
+        # PA% = (productive_hours - breakdown_hours) / productive_hours * 100
         results['PA(%)'] = np.where(
-            results['mohh'] > 0,
-            ((results['mohh'] - results['breakdown_hours']) / results['mohh']) * 100,
+            results['productive_hours'] > 0,
+            ((results['productive_hours'] - results['breakdown_hours']) / results['productive_hours']) * 100,
             0.0
         )
         
-        # Calculate UA%
-        available_hours = results['mohh'] - results['breakdown_hours']
+        # Calculate UA% - Utilization Availability
+        # UA% = (available_hours - delay_hours) / available_hours * 100
+        available_hours = results['productive_hours'] - results['breakdown_hours']
         results['UA(%)'] = np.where(
             available_hours > 0,
             ((available_hours - results['delay_hours']) / available_hours) * 100,
@@ -238,7 +249,7 @@ class VehicleMetricsAnalyzer:
         # Additional metrics
         results['efficiency(%)'] = np.where(
             results['total_hours'] > 0,
-            (results['mohh'] / results['total_hours']) * 100,
+            (results['productive_hours'] / results['total_hours']) * 100,
             0.0
         )
         
@@ -246,7 +257,7 @@ class VehicleMetricsAnalyzer:
         results['availability_score'] = (results['PA(%)'] + results['UA(%)']) / 2
         
         # Round numeric columns
-        numeric_cols = ['breakdown_hours', 'delay_hours', 'mohh', 'total_hours', 
+        numeric_cols = ['breakdown_hours', 'delay_hours', 'productive_hours', 'total_hours', 
                        'downtime_hours', 'PA(%)', 'UA(%)', 'efficiency(%)', 'availability_score']
         for col in numeric_cols:
             results[col] = results[col].round(2)
@@ -256,7 +267,7 @@ class VehicleMetricsAnalyzer:
         results['rank'] = results.index + 1
         
         # Reorder columns
-        column_order = ['rank', group_by, 'breakdown_hours', 'delay_hours', 'mohh', 
+        column_order = ['rank', group_by, 'breakdown_hours', 'delay_hours', 'productive_hours', 
                        'total_hours', 'downtime_hours', 'PA(%)', 'UA(%)', 'efficiency(%)', 'availability_score']
         results = results[column_order]
         
@@ -272,7 +283,8 @@ class VehicleMetricsAnalyzer:
             'avg_efficiency': results_df['efficiency(%)'].mean(),
             'total_breakdown_hours': results_df['breakdown_hours'].sum(),
             'total_delay_hours': results_df['delay_hours'].sum(),
-            'total_mohh': results_df['mohh'].sum(),
+            'total_productive_hours': results_df['productive_hours'].sum(),  # RENAMED
+            'total_hours': results_df['total_hours'].sum(),  # ADDED
             'best_performer': results_df.iloc[0][results_df.columns[1]] if len(results_df) > 0 else 'N/A',
             'worst_performer': results_df.iloc[-1][results_df.columns[1]] if len(results_df) > 0 else 'N/A'
         }
